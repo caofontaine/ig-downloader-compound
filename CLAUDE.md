@@ -39,6 +39,10 @@ npm run build   # Production build
 npm run lint    # Run ESLint
 ```
 
+## Git Workflow
+
+- Before making any commits, ensure a remote repository exists and is pushable. If no remote is configured (or the URL is invalid), create one with `gh repo create` first.
+
 ## Conventions
 
 - Use `lib/` for shared utilities (not `utils/` or `helpers/`)
