@@ -122,15 +122,16 @@ export async function POST(request: NextRequest) {
 
 function buildFilenames(items: MediaItem[], meta?: ApiResponse["meta"]): string[] {
   const username = safeSegment(meta?.username ?? "instagram");
-  if (items.length === 1) {
-    const ext = items[0].type === "video" ? "mp4" : "jpg";
-    const dateStamp = formatDateTimeStamp(Date.now());
-    return [`${username}_${dateStamp}.${ext}`];
-  }
-  const shortcode = safeSegment(meta?.shortcode ?? "post");
+  const dateOrCode = meta?.postTimestamp
+    ? formatIsoTimestamp(meta.postTimestamp)
+    : safeSegment(meta?.shortcode ?? "post");
+
   return items.map((item, index) => {
     const ext = getExtension(item.url, item.type);
-    return `${username}_post_${shortcode}_${index + 1}.${ext}`;
+    if (items.length === 1) {
+      return `${username}_${dateOrCode}.${ext}`;
+    }
+    return `${username}_${dateOrCode}_${index + 1}.${ext}`;
   });
 }
 
@@ -155,8 +156,10 @@ function safeSegment(value: string): string {
   return cleaned.length > 0 ? cleaned : "instagram";
 }
 
-function formatDateTimeStamp(timestamp: number): string {
+function formatIsoTimestamp(timestamp: number): string {
   const d = new Date(timestamp);
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}_${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;
+  const date = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+  const time = `${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;
+  return `${date}T${time}.000Z`;
 }
