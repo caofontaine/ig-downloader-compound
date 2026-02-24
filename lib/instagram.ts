@@ -1,6 +1,6 @@
 import { load } from "cheerio";
 import type { MediaItem } from "./types";
-import { enrichMediaItems } from "./media";
+import { enrichMediaItems, decodeEfgTag } from "./media";
 
 export interface ExtractedMedia {
   items: MediaItem[];
@@ -466,23 +466,14 @@ function inferVideoDimensionsFromUrl(
   url: string,
   aspect?: { width: number; height: number },
 ): { width: number; height: number } | null {
-  try {
-    const parsed = new URL(url);
-    const efg = parsed.searchParams.get("efg");
-    if (!efg) return null;
-    const decoded = Buffer.from(decodeURIComponent(efg), "base64").toString("utf8");
-    const payload = safeJsonParse(decoded);
-    const tag = payload?.vencode_tag;
-    if (typeof tag !== "string") return null;
-    const match = /C\d\.(\d{3,4})\./.exec(tag);
-    if (!match) return null;
-    const width = Number(match[1]);
-    if (!width || !aspect?.width || !aspect?.height) return null;
-    const height = Math.round((width * aspect.height) / aspect.width);
-    return height ? { width, height } : null;
-  } catch {
-    return null;
-  }
+  const tag = decodeEfgTag(url);
+  if (!tag) return null;
+  const match = /C\d\.(\d{3,4})\./.exec(tag);
+  if (!match) return null;
+  const width = Number(match[1]);
+  if (!width || !aspect?.width || !aspect?.height) return null;
+  const height = Math.round((width * aspect.height) / aspect.width);
+  return height ? { width, height } : null;
 }
 
 /* eslint-enable @typescript-eslint/no-explicit-any */

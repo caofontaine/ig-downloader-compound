@@ -20,12 +20,18 @@ export async function enrichMediaItems(items: MediaItem[]): Promise<void> {
         const target = item.width && item.height
           ? { width: item.width, height: item.height }
           : undefined;
-        item.url = await promoteImageUrl(item.url, target);
+        const promoted = await promoteImageUrl(item.url, target);
+        item.url = promoted.url;
         item.thumbnail = item.url;
-        const probed = await probeImageDimensions(item.url);
-        if (probed) {
-          item.width = probed.width;
-          item.height = probed.height;
+        if (promoted.dims) {
+          item.width = promoted.dims.width;
+          item.height = promoted.dims.height;
+        } else {
+          const probed = await probeImageDimensions(item.url);
+          if (probed) {
+            item.width = probed.width;
+            item.height = probed.height;
+          }
         }
       }
       if (!item.width || !item.height) {
@@ -54,14 +60,15 @@ async function fetchFileSize(url: string): Promise<number> {
 async function promoteImageUrl(
   url: string,
   targetDimensions?: { width: number; height: number },
-): Promise<string> {
+): Promise<{ url: string; dims?: { width: number; height: number } }> {
   let current = url;
   if (isInstagramMediaUrl(current)) {
     const resolved = await resolveLegacyImageUrl(current);
     if (resolved) current = resolved;
   }
   const upgraded = await tryUpgradeSize(current, targetDimensions);
-  return upgraded ?? current;
+  if (upgraded) return upgraded;
+  return { url: current };
 }
 
 function isInstagramMediaUrl(url: string): boolean {
@@ -87,7 +94,7 @@ async function resolveLegacyImageUrl(url: string): Promise<string | null> {
   }
 }
 
-function parseEfgDimensions(url: string): { width: number; height: number } | null {
+export function decodeEfgTag(url: string): string | null {
   try {
     const parsed = new URL(url);
     const efg = parsed.searchParams.get("efg");
@@ -95,14 +102,19 @@ function parseEfgDimensions(url: string): { width: number; height: number } | nu
     const decoded = Buffer.from(decodeURIComponent(efg), "base64").toString("utf8");
     const payload = JSON.parse(decoded);
     const tag = payload?.vencode_tag;
-    if (typeof tag !== "string") return null;
-    // Match patterns like "xpids.1200x1600.sdr.C3"
-    const match = /\.(\d{3,4})x(\d{3,4})\./.exec(tag);
-    if (!match) return null;
-    return { width: Number(match[1]), height: Number(match[2]) };
+    return typeof tag === "string" ? tag : null;
   } catch {
     return null;
   }
+}
+
+function parseEfgDimensions(url: string): { width: number; height: number } | null {
+  const tag = decodeEfgTag(url);
+  if (!tag) return null;
+  // Match patterns like "xpids.1200x1600.sdr.C3"
+  const match = /\.(\d{3,4})x(\d{3,4})\./.exec(tag);
+  if (!match) return null;
+  return { width: Number(match[1]), height: Number(match[2]) };
 }
 
 function buildCandidateUrl(
@@ -130,7 +142,7 @@ function buildCandidateUrl(
 async function tryUpgradeSize(
   url: string,
   targetDimensions?: { width: number; height: number },
-): Promise<string | null> {
+): Promise<{ url: string; dims?: { width: number; height: number } } | null> {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -151,7 +163,7 @@ async function tryUpgradeSize(
   const origH = Number(heightRaw);
   if (!origW || !origH) return null;
 
-  // Build candidate sizes: efg dimensions, target dimensions, remove size, tiers, 4/3
+  // Build candidate sizes: efg dimensions, target dimensions, tiers, remove size, 4/3
   const candidates: Array<{ w: number; h: number; prefix: string } | "remove"> = [];
 
   // 1. efg-derived dimensions
@@ -165,10 +177,7 @@ async function tryUpgradeSize(
     candidates.push({ w: targetDimensions.width, h: targetDimensions.height, prefix });
   }
 
-  // 3. Remove size token entirely
-  candidates.push("remove");
-
-  // 4. Known Instagram tiers (descending)
+  // 3. Known Instagram tiers (descending)
   const aspect = origH / origW;
   for (const tierW of [1440, 1200]) {
     if (tierW > origW) {
@@ -178,27 +187,49 @@ async function tryUpgradeSize(
     }
   }
 
+  // 4. Remove size token entirely (fallback)
+  candidates.push("remove");
+
   // 5. 4/3 multiplier
   const w43 = Math.round((origW * 4) / 3);
   const h43 = Math.round((origH * 4) / 3);
   if (w43 > origW) candidates.push({ w: w43, h: h43, prefix });
 
-  // Try each candidate
+  // Try each candidate, skipping duplicate URLs
+  const seen = new Set<string>();
   for (const candidate of candidates) {
     const probeUrl = buildCandidateUrl(parsed, tokens, sizeIndex, candidate);
+    if (seen.has(probeUrl)) continue;
+    seen.add(probeUrl);
     const result = await probeImageUrl(probeUrl);
     if (!result) continue;
 
     // Verify actual dimensions are better than original
     const dims = await probeImageDimensions(result);
-    if (dims && dims.width > origW) return result;
-    if (!dims) return result; // can't verify, trust the CDN
+    if (dims && dims.width > origW) return { url: result, dims };
+    if (!dims) return { url: result }; // can't verify, trust the CDN
   }
 
   return null;
 }
 
+export function isAllowedProxyUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    return (
+      host === "instagram.com" ||
+      host.endsWith(".instagram.com") ||
+      host.endsWith(".cdninstagram.com") ||
+      host.endsWith(".fbcdn.net")
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function probeImageUrl(url: string): Promise<string | null> {
+  if (!isAllowedProxyUrl(url)) return null;
   try {
     const res = await fetchWithTimeout(url, { method: "HEAD", headers: { "User-Agent": "Mozilla/5.0" } });
     const contentType = res.headers.get("content-type") ?? "";

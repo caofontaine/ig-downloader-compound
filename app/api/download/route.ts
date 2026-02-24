@@ -123,14 +123,16 @@ export async function POST(request: NextRequest) {
 function buildFilenames(items: MediaItem[], meta?: ApiResponse["meta"]): string[] {
   const username = safeSegment(meta?.username ?? "instagram");
   const dateOrCode = meta?.postTimestamp
-    ? formatIsoTimestamp(meta.postTimestamp)
+    ? formatTimestampForFilename(meta.postTimestamp)
     : safeSegment(meta?.shortcode ?? "post");
+
+  if (items.length === 1) {
+    const ext = getExtension(items[0].url, items[0].type);
+    return [`${username}_${dateOrCode}.${ext}`];
+  }
 
   return items.map((item, index) => {
     const ext = getExtension(item.url, item.type);
-    if (items.length === 1) {
-      return `${username}_${dateOrCode}.${ext}`;
-    }
     return `${username}_${dateOrCode}_${index + 1}.${ext}`;
   });
 }
@@ -156,7 +158,7 @@ function safeSegment(value: string): string {
   return cleaned.length > 0 ? cleaned : "instagram";
 }
 
-function formatIsoTimestamp(timestamp: number): string {
+function formatTimestampForFilename(timestamp: number): string {
   const d = new Date(timestamp);
   const pad = (n: number) => String(n).padStart(2, "0");
   const date = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
