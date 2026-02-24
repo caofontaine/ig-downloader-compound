@@ -1,19 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-
-function isAllowedProxyUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    const host = url.hostname.toLowerCase();
-    return (
-      host === "instagram.com" ||
-      host.endsWith(".instagram.com") ||
-      host.endsWith(".cdninstagram.com") ||
-      host.endsWith(".fbcdn.net")
-    );
-  } catch {
-    return false;
-  }
-}
+import { isAllowedProxyUrl } from "@/lib/instagram-cdn";
 
 export async function GET(request: NextRequest) {
   const rawUrl = request.nextUrl.searchParams.get("url");
