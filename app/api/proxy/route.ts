@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isAllowedProxyUrl } from "@/lib/media";
+import { isAllowedProxyUrl } from "@/lib/instagram-cdn";
 
 export async function GET(request: NextRequest) {
   const rawUrl = request.nextUrl.searchParams.get("url");

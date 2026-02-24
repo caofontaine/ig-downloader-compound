@@ -1,4 +1,5 @@
 import type { MediaItem } from "./types";
+import { isAllowedProxyUrl, decodeEfgTag } from "./instagram-cdn";
 
 const FETCH_TIMEOUT_MS = 10_000;
 
@@ -47,6 +48,7 @@ export async function enrichMediaItems(items: MediaItem[]): Promise<void> {
 }
 
 async function fetchFileSize(url: string): Promise<number> {
+  if (!isAllowedProxyUrl(url)) return 0;
   try {
     const res = await fetchWithTimeout(url, { method: "HEAD" });
     if (!res.ok) return 0;
@@ -85,24 +87,12 @@ async function resolveLegacyImageUrl(url: string): Promise<string | null> {
     const res = await fetchWithTimeout(url, { headers: { "User-Agent": "Mozilla/5.0" } });
     const contentType = res.headers.get("content-type") ?? "";
     if (!res.ok || !contentType.startsWith("image/")) return null;
+    const finalUrl = res.url || url;
+    if (!isAllowedProxyUrl(finalUrl)) return null;
     if (res.body) {
       try { await res.body.cancel(); } catch { /* ignore */ }
     }
-    return res.url || url;
-  } catch {
-    return null;
-  }
-}
-
-export function decodeEfgTag(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    const efg = parsed.searchParams.get("efg");
-    if (!efg) return null;
-    const decoded = Buffer.from(decodeURIComponent(efg), "base64").toString("utf8");
-    const payload = JSON.parse(decoded);
-    const tag = payload?.vencode_tag;
-    return typeof tag === "string" ? tag : null;
+    return finalUrl;
   } catch {
     return null;
   }
@@ -142,7 +132,7 @@ function buildCandidateUrl(
 async function tryUpgradeSize(
   url: string,
   targetDimensions?: { width: number; height: number },
-): Promise<{ url: string; dims?: { width: number; height: number } } | null> {
+): Promise<{ url: string; dims: { width: number; height: number } } | null> {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -163,7 +153,7 @@ async function tryUpgradeSize(
   const origH = Number(heightRaw);
   if (!origW || !origH) return null;
 
-  // Build candidate sizes: efg dimensions, target dimensions, tiers, remove size, 4/3
+  // Build candidate sizes: efg dimensions, target dimensions, tiers, remove size
   const candidates: Array<{ w: number; h: number; prefix: string } | "remove"> = [];
 
   // 1. efg-derived dimensions
@@ -190,42 +180,25 @@ async function tryUpgradeSize(
   // 4. Remove size token entirely (fallback)
   candidates.push("remove");
 
-  // 5. 4/3 multiplier
-  const w43 = Math.round((origW * 4) / 3);
-  const h43 = Math.round((origH * 4) / 3);
-  if (w43 > origW) candidates.push({ w: w43, h: h43, prefix });
-
-  // Try each candidate, skipping duplicate URLs
+  // Try each candidate, skipping duplicate URLs (pre- and post-redirect)
   const seen = new Set<string>();
+  const seenResults = new Set<string>();
   for (const candidate of candidates) {
     const probeUrl = buildCandidateUrl(parsed, tokens, sizeIndex, candidate);
     if (seen.has(probeUrl)) continue;
     seen.add(probeUrl);
     const result = await probeImageUrl(probeUrl);
     if (!result) continue;
+    if (seenResults.has(result)) continue;
+    seenResults.add(result);
 
-    // Verify actual dimensions are better than original
+    // Require verified improvement — no unverified "trust CDN" fallback
     const dims = await probeImageDimensions(result);
-    if (dims && dims.width > origW) return { url: result, dims };
-    if (!dims) return { url: result }; // can't verify, trust the CDN
+    if (!dims || dims.width <= origW) continue;
+    return { url: result, dims };
   }
 
   return null;
-}
-
-export function isAllowedProxyUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    const host = url.hostname.toLowerCase();
-    return (
-      host === "instagram.com" ||
-      host.endsWith(".instagram.com") ||
-      host.endsWith(".cdninstagram.com") ||
-      host.endsWith(".fbcdn.net")
-    );
-  } catch {
-    return false;
-  }
 }
 
 async function probeImageUrl(url: string): Promise<string | null> {
@@ -233,15 +206,17 @@ async function probeImageUrl(url: string): Promise<string | null> {
   try {
     const res = await fetchWithTimeout(url, { method: "HEAD", headers: { "User-Agent": "Mozilla/5.0" } });
     const contentType = res.headers.get("content-type") ?? "";
-    if (res.ok && contentType.startsWith("image/")) return res.url || url;
+    const finalUrl = res.url || url;
+    if (res.ok && contentType.startsWith("image/") && isAllowedProxyUrl(finalUrl)) return finalUrl;
   } catch { /* try GET fallback */ }
 
   try {
     const res = await fetchWithTimeout(url, { headers: { "User-Agent": "Mozilla/5.0", Range: "bytes=0-0" } });
     const contentType = res.headers.get("content-type") ?? "";
-    if (res.ok && contentType.startsWith("image/")) {
+    const finalUrl = res.url || url;
+    if (res.ok && contentType.startsWith("image/") && isAllowedProxyUrl(finalUrl)) {
       if (res.body) { try { await res.body.cancel(); } catch { /* ignore */ } }
-      return res.url || url;
+      return finalUrl;
     }
   } catch { /* ignore */ }
 
@@ -261,6 +236,7 @@ function inferDimensionsFromUrl(url: string): { width: number; height: number } 
 }
 
 export async function probeImageDimensions(url: string): Promise<{ width: number; height: number } | null> {
+  if (!isAllowedProxyUrl(url)) return null;
   try {
     const res = await fetchWithTimeout(url, { headers: { "User-Agent": "Mozilla/5.0", Range: "bytes=0-4095" } });
     if (!res.ok) return null;

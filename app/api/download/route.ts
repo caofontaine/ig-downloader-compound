@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Readable } from "stream";
 import archiver from "archiver";
 import { fetchPostMedia, normalizePostUrl, UpstreamError } from "@/lib/instagram";
+import { isAllowedProxyUrl } from "@/lib/instagram-cdn";
 import type { ApiResponse, MediaItem } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
@@ -45,6 +46,12 @@ export async function POST(request: NextRequest) {
     // Single item: stream directly
     if (result.items.length === 1) {
       const item = result.items[0];
+      if (!isAllowedProxyUrl(item.url)) {
+        return NextResponse.json<ApiResponse>(
+          { status: "error", items: [], error: "Invalid media URL." },
+          { status: 400 },
+        );
+      }
       const upstream = await fetch(item.url);
       if (!upstream.ok || !upstream.body) {
         return NextResponse.json<ApiResponse>(
@@ -86,6 +93,7 @@ export async function POST(request: NextRequest) {
         (async () => {
           for (let i = 0; i < result.items.length; i++) {
             const item = result.items[i];
+            if (!isAllowedProxyUrl(item.url)) { archive.abort(); return; }
             const response = await fetch(item.url);
             if (!response.ok || !response.body) {
               archive.abort();

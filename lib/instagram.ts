@@ -1,6 +1,7 @@
 import { load } from "cheerio";
 import type { MediaItem } from "./types";
-import { enrichMediaItems, decodeEfgTag } from "./media";
+import { enrichMediaItems } from "./media";
+import { decodeEfgTag } from "./instagram-cdn";
 
 export interface ExtractedMedia {
   items: MediaItem[];
